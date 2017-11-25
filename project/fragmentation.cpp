@@ -1,13 +1,17 @@
 #include "fragmentation.h"
+#include <cilk\cilk.h>
+#include <cilk\reducer_vector.h>
 
+std::vector<Box> buf_boxes;
 /// вектор, содержащий box-ы, €вл€ющиес€ частью рабочего пространства
-std::vector<Box> solution;
+cilk::reducer< cilk::op_vector<Box> > solution;
 /// вектор, содержащий box-ы, не €вл€ющиес€ частью рабочего пространства
-std::vector<Box> not_solution;
+cilk::reducer< cilk::op_vector<Box> > not_solution;
 /// вектор, содержащий box-ы, наход€щиес€ на границе между "рабочим" и "нерабочим" пространством
-std::vector<Box> boundary;
+cilk::reducer< cilk::op_vector<Box> > boundary;
 /// вектор, хран€щий box-ы, анализируемые на следующей итерации алгоритма
-std::vector<Box> temporary_boxes;
+cilk::reducer< cilk::op_vector<Box> > temporary_boxes;
+
 
 /// функции gj()
 //------------------------------------------------------------------------------------------
@@ -177,14 +181,13 @@ void low_level_fragmentation::GetBoxType(const Box& box)
 	switch (res)
 	{
 
-	case 0: {solution.push_back(box); break; }      // solution
-	case 1: {not_solution.push_back(box); break; } // not solution
-
-	case 2: {boundary.push_back(box); break; } // boundary
+	case 0: {solution->push_back(box); break; }            // solution
+	case 1: {not_solution->push_back(box); break; } // not solution
+	case 2: {boundary->push_back(box); break; } // boundary
 	case 3: {
 		GetNewBoxes(box, new_pair_of_boxes);  // new boxes
-		temporary_boxes.push_back(new_pair_of_boxes.first);
-		temporary_boxes.push_back(new_pair_of_boxes.second);
+		temporary_boxes->push_back(new_pair_of_boxes.first);
+		temporary_boxes->push_back(new_pair_of_boxes.second);
 		break;
 	}
 	}
@@ -276,14 +279,15 @@ void high_level_analysis::GetSolution()
 {
 	current_box = Box(-g_l1_max, 0, g_l2_max + g_l0 + g_l1_max, __min(g_l1_max, g_l2_max));
 	std::vector<Box> current_boxes;
-	temporary_boxes.push_back(current_box);
+	temporary_boxes->push_back(current_box);
 
 	int level = FindTreeDepth();
 	for (int i = 0; i < (level + 1); ++i)
 	{
-		current_boxes = temporary_boxes;
-		temporary_boxes.clear();
-		for (int j = 0; j < current_boxes.size(); ++j)
+		temporary_boxes.move_out(buf_boxes);
+		current_boxes = buf_boxes;
+		buf_boxes.clear();
+		cilk_for(int j = 0; j < current_boxes.size(); ++j)
 			GetBoxType(current_boxes[j]);
 	}
 }
@@ -293,26 +297,33 @@ void high_level_analysis::GetSolution()
 void WriteResults(const char* file_names[])
 {
 	double x_min, y_min, width, height;
+	vector <Box> temp;
 
 	std::ofstream fsolution(file_names[0]); // создаЄм объект класса ofstream дл€ записи и св€зываем его с файлом solution.txt
 	std::ofstream fboundary(file_names[1]); // создаЄм объект класса ofstream дл€ записи и св€зываем его с файлом boundary.txt
 	std::ofstream fnot_solution(file_names[2]); // создаЄм объект класса ofstream дл€ записи и св€зываем его с файлом not_solution.txt
 
-	for (int i = 0; i < solution.size(); i++)
+	solution.move_out(temp);	 // сливаем вектор решений во временный вектор
+	for (int i = 0; i < temp.size(); i++)
 	{
-		solution[i].GetParameters(x_min, y_min, width, height);
+
+		temp[i].GetParameters(x_min, y_min, width, height);
 		fsolution << x_min << " " << y_min << " " << width << " " << height << '\n';
 	}
 
-	for (int i = 0; i < boundary.size(); i++)
+	temp.clear(); // очищаем временный вектор
+	boundary.move_out(temp);	 // сливаем вектор границ во временный вектор
+	for (int i = 0; i < temp.size(); i++)
 	{
-		boundary[i].GetParameters(x_min, y_min, width, height);
+		temp[i].GetParameters(x_min, y_min, width, height);
 		fboundary << x_min << " " << y_min << " " << width << " " << height << '\n';
 	}
 
-	for (int i = 0; i < not_solution.size(); i++)
+	temp.clear(); // очищаем временный вектор
+	not_solution.move_out(temp);	 // сливаем вектор не решений во временный вектор
+	for (int i = 0; i < temp.size(); i++)
 	{
-		not_solution[i].GetParameters(x_min, y_min, width, height);
+		temp[i].GetParameters(x_min, y_min, width, height);
 		fnot_solution << x_min << " " << y_min << " " << width << " " << height << '\n';
 	}
 
